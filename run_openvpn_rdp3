@@ -1,0 +1,162 @@
+#!/bin/bash
+
+OVPN="$1"
+
+# Check if openvpn exist?
+if command -v openvpn >/dev/null 2>&1; then
+    OPENVPN_CMD=openvpn
+else
+    echo "[-] Neither openvpn not found. Please install it."
+    exit 1
+fi
+
+# Check if xfreerdp or xfreerdp3 exist?
+if command -v xfreerdp >/dev/null 2>&1; then
+    RDP_CMD="xfreerdp"
+elif command -v xfreerdp3 >/dev/null 2>&1; then
+    RDP_CMD="xfreerdp3"
+else
+    echo "[-] Neither xfreerdp3 nor xfreerdp found. Please install it."
+    exit 1
+fi
+
+if [[ -z "$OVPN" ]]; then
+    echo "Usage: $0 <config.ovpn>"
+    exit 1
+fi
+
+while true; do
+    # Check if OpenVPN is running
+    VPN_PID=$(pgrep -f "openvpn --config $OVPN")
+
+    if [[ -n "$VPN_PID" ]]; then
+        echo "[+] OpenVPN is running (PID: $VPN_PID). Stopping..."
+        sudo kill "$VPN_PID"
+    fi
+    echo "[!] OpenVPN is not running. Starting..."
+
+    # DNS fix
+    if ! grep -q "8.8.8.8" /etc/resolv.conf; then
+        echo "nameserver 8.8.8.8"  | sudo tee -a /etc/resolv.conf >/dev/null
+    fi
+    if ! grep -q "8.8.4.4" /etc/resolv.conf; then
+        echo "nameserver 8.8.4.4"  | sudo tee -a /etc/resolv.conf >/dev/null
+    fi
+
+    # Start OpenVPN in background
+    sudo openvpn --config "$OVPN" --daemon
+    echo "[+] OpenVPN started in background."
+
+    sleep 2
+
+    ########################
+    #  AFTER RUN CHECKS
+    ########################
+
+    echo "[+] Checking VPN status..."
+
+    # 1. Check process
+    VPN_PID=$(pgrep -f "openvpn --config $OVPN")
+    if [[ -n "$VPN_PID" ]]; then
+        echo "[+] VPN running (PID: $VPN_PID)"
+    else
+        echo "[-] VPN process not found!"
+        exit 1
+    fi
+
+    # 2. Check tun0 interface
+    # Wait for tun0 (up to 10 seconds)
+    echo "[!] Waiting for tun0 interface..."
+    for i in {1..20}; do
+        if ip addr show tun0 &>/dev/null; then
+            echo "[+] tun0 interface created"
+            TUN_OK=true
+            break
+        fi
+        sleep 0.5
+    done
+
+    if [[ -z "$TUN_OK" ]]; then
+        echo "[-] tun0 missing after waiting"
+        exit 1;
+    fi
+
+    # 3. Check routing
+    # Wait for routes (up to 10 seconds)
+    echo "[!] Waiting for routes through tun0..."
+    for i in {1..20}; do
+        if ip route | grep -q "tun0"; then
+            echo "[+] Routes through tun0 exist"
+            ROUTE_OK=true
+            break
+        fi
+        sleep 0.5
+    done
+
+    if [[ -z "$ROUTE_OK" ]]; then
+        echo "[-] No routing through tun0 after waiting"
+        exit 1;
+    fi
+
+    # 4. Connectivity test
+    if ping -c1 -W1 8.8.8.8 &>/dev/null || ping -c1 -W1 8.8.4.4 &>/dev/null; then
+        echo "[+] Internet reachable"
+    else
+        echo "[-] No internet"
+        exit 1
+    fi
+
+    echo "[!] VPN startup check complete."
+
+    echo "Enter Offsec machine IP: "
+    read -r ip
+
+    # Ensure IP is not empty and looks like an IP
+    if [[ -z "$ip" ]]; then
+        echo "[-] IP cannot be empty!"
+        continue
+    fi
+
+    if ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "[-] Invalid IP format!"
+        continue
+    fi
+
+    echo "[!] Testing RDP connectivity to $ip:3389 ..."
+
+    # Try connecting to port 3389 (RDP)
+
+    if command -v nc >/dev/null; then
+        CHECK_CMD="nc -z -w2 $ip 3389"
+    else
+        CHECK_CMD="timeout 2 bash -c \"echo >/dev/tcp/$ip/3389\""
+    fi
+
+    if eval "$CHECK_CMD" 2>/dev/null; then
+        echo "[+] RDP port reachable! Starting $RDP_CMD..."
+        $RDP_CMD /u:Offsec /p:lab /v:"${ip}" /dynamic-resolution
+        break
+    else
+        echo "[-] Cannot reach RDP port. Try again."
+    fi
+
+
+    for attempt in {1..30}; do
+        if eval "$CHECK_CMD" 2>/dev/null; then
+            echo "[+] RDP port reachable! Starting $RDP_CMD..."
+            $RDP_CMD /u:Offsec /p:lab /v:"${ip}" /dynamic-resolution
+            break 2
+        else
+            echo "[-] Cannot reach RDP port. Try again. ($attempt/30)"
+            sleep 1
+        fi
+    done
+    echo "[*] Finished 30 attempts..."
+
+    # VPN_PID=$(pgrep -f "openvpn --config $OVPN")
+    if [[ -n "$VPN_PID" ]]; then
+        echo "[+] OpenVPN is running (PID: $VPN_PID). Stopping..."
+        sudo kill "$VPN_PID"
+        exit 0
+    fi
+done

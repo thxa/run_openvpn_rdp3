@@ -112,15 +112,18 @@ while true; do
     read -r ip
 
     # Ensure IP is not empty and looks like an IP
-    if [[ -z "$ip" ]]; then
+    while [[ -z "$ip" ]]; do
         echo "[-] IP cannot be empty!"
-        continue
-    fi
+        echo "Enter Offsec machine IP: "
+        read -r ip
+    done
 
-    if ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    while ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; do
         echo "[-] Invalid IP format!"
-        continue
-    fi
+        echo "Enter Offsec machine IP: "
+        read -r ip
+
+    done
 
     echo "[!] Testing RDP connectivity to $ip:3389 ..."
 
@@ -132,19 +135,10 @@ while true; do
         CHECK_CMD="timeout 2 bash -c \"echo >/dev/tcp/$ip/3389\""
     fi
 
-    if eval "$CHECK_CMD" 2>/dev/null; then
-        echo "[+] RDP port reachable! Starting $RDP_CMD..."
-        $RDP_CMD /u:Offsec /p:lab /v:"${ip}" /dynamic-resolution
-        break
-    else
-        echo "[-] Cannot reach RDP port. Try again."
-    fi
-
-
     for attempt in {1..30}; do
         if eval "$CHECK_CMD" 2>/dev/null; then
             echo "[+] RDP port reachable! Starting $RDP_CMD..."
-            $RDP_CMD /u:Offsec /p:lab /v:"${ip}" /dynamic-resolution
+            $RDP_CMD /u:Offsec /p:lab /v:"${ip}" /dynamic-resolution /cert:ignore /tls-seclevel:0
             break 2
         else
             echo "[-] Cannot reach RDP port. Try again. ($attempt/30)"
@@ -153,7 +147,7 @@ while true; do
     done
     echo "[*] Finished 30 attempts..."
 
-    # VPN_PID=$(pgrep -f "openvpn --config $OVPN")
+    VPN_PID=$(pgrep -f "openvpn --config $OVPN")
     if [[ -n "$VPN_PID" ]]; then
         echo "[+] OpenVPN is running (PID: $VPN_PID). Stopping..."
         sudo kill "$VPN_PID"

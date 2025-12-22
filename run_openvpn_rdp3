@@ -11,9 +11,9 @@ else
 fi
 
 # Check if xfreerdp or xfreerdp3 exist?
-if command -v xfreerdp >/dev/null 2>&1; then
-    RDP_CMD="xfreerdp"
-elif command -v xfreerdp3 >/dev/null 2>&1; then
+# if command -v xfreerdp >/dev/null 2>&1; then
+#     RDP_CMD="xfreerdp"
+if command -v xfreerdp3 >/dev/null 2>&1; then
     RDP_CMD="xfreerdp3"
 else
     echo "[-] Neither xfreerdp3 nor xfreerdp found. Please install it."
@@ -26,15 +26,7 @@ if [[ -z "$OVPN" ]]; then
 fi
 
 while true; do
-    # Check if OpenVPN is running
-    VPN_PID=$(pgrep -f "openvpn --config $OVPN")
-
-    if [[ -n "$VPN_PID" ]]; then
-        echo "[+] OpenVPN is running (PID: $VPN_PID). Stopping..."
-        sudo kill "$VPN_PID"
-    fi
-    echo "[!] OpenVPN is not running. Starting..."
-
+    
     # DNS fix
     if ! grep -q "8.8.8.8" /etc/resolv.conf; then
         echo "nameserver 8.8.8.8"  | sudo tee -a /etc/resolv.conf >/dev/null
@@ -43,11 +35,15 @@ while true; do
         echo "nameserver 8.8.4.4"  | sudo tee -a /etc/resolv.conf >/dev/null
     fi
 
-    # Start OpenVPN in background
-    sudo openvpn --config "$OVPN" --daemon
-    echo "[+] OpenVPN started in background."
 
-    sleep 2
+    VPN_PID=$(pgrep -f "openvpn --config $OVPN")
+
+    if [[ -z "$VPN_PID" ]]; then
+        # Start OpenVPN in background
+        sudo openvpn --config "$OVPN" --daemon
+        echo "[+] OpenVPN started in background."
+        sleep 2
+    fi
 
     ########################
     #  AFTER RUN CHECKS
@@ -119,10 +115,20 @@ while true; do
     done
 
     while ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; do
+        if [[ $ip  == "r" ]]; then 
+
+            # Check if OpenVPN is running
+            VPN_PID=$(pgrep -f "openvpn --config $OVPN")
+
+            if [[ -n "$VPN_PID" ]]; then
+                echo "[+] OpenVPN is running (PID: $VPN_PID). Stopping..."
+                sudo kill "$VPN_PID"
+            fi 
+            continue 2
+        fi
         echo "[-] Invalid IP format!"
         echo "Enter Offsec machine IP: "
         read -r ip
-
     done
 
     echo "[!] Testing RDP connectivity to $ip:3389 ..."
@@ -138,7 +144,13 @@ while true; do
     for attempt in {1..30}; do
         if eval "$CHECK_CMD" 2>/dev/null; then
             echo "[+] RDP port reachable! Starting $RDP_CMD..."
-            $RDP_CMD /u:Offsec /p:lab /v:"${ip}" /dynamic-resolution /cert:ignore /tls-seclevel:0
+            # rdesktop -u Offsec -p lab "${ip}"
+            # $RDP_CMD
+            xfreerdp3 /u:Offsec /p:lab /v:"${ip}" +auto-reconnect +clipboard /dynamic-resolution /log-level:TRACE /sec:tls /cert:ignore 
+            # /tls-seclevel:0 /cert:ignore
+            # /sec:rdp /cert:ignore
+            # /sec:tls /cert:ignore 
+            exit 0
             break 2
         else
             echo "[-] Cannot reach RDP port. Try again. ($attempt/30)"
@@ -146,11 +158,5 @@ while true; do
         fi
     done
     echo "[*] Finished 30 attempts..."
-
-    VPN_PID=$(pgrep -f "openvpn --config $OVPN")
-    if [[ -n "$VPN_PID" ]]; then
-        echo "[+] OpenVPN is running (PID: $VPN_PID). Stopping..."
-        sudo kill "$VPN_PID"
-        exit 0
-    fi
 done
+
